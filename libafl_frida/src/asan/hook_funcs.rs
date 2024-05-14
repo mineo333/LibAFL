@@ -999,6 +999,8 @@ impl AsanRuntime {
                 offset: usize,
             ) -> *mut c_void;
         }
+
+        log::trace!("New mmap: {:#x} {:#x}", addr as usize, length);
         let res = unsafe { mmap(addr, length, prot, flags, fd, offset) };
         if res != (-1_isize as *mut c_void) {
             self.allocator_mut()

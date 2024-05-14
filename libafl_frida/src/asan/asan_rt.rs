@@ -129,7 +129,7 @@ pub struct AsanRuntime {
     suppressed_addresses: Vec<usize>,
     skip_ranges: Vec<SkipRange>,
     continue_on_error: bool,
-    pub(crate) hooks: HashMap<String, NativePointer>,
+//    pub(crate) hooks: HashMap<String, NativePointer>,
     pub(crate) hooks_enabled: bool,
     pc: Option<usize>,
 
@@ -159,16 +159,11 @@ impl FridaRuntime for AsanRuntime {
         _ranges: &RangeMap<usize, (u16, String)>,
         module_map: &Rc<ModuleMap>,
     ) {
+
         self.allocator.init();
 
         AsanErrors::get_mut_blocking().set_continue_on_error(self.continue_on_error);
-
-        self.register_hooks(gum);
-
-        self.generate_instrumentation_blobs();
-
-        self.unpoison_all_existing_memory();
-
+        
         self.module_map = Some(module_map.clone());
         self.suppressed_addresses
             .extend(self.skip_ranges.iter().map(|skip| match skip {
@@ -179,8 +174,13 @@ impl FridaRuntime for AsanRuntime {
                     lib_start + range.start
                 }
             }));
+        
+        self.register_hooks(gum);
+        self.generate_instrumentation_blobs();
+        self.unpoison_all_existing_memory();
 
         self.register_thread();
+
     }
     fn pre_exec<I: libafl::inputs::Input + libafl::inputs::HasTargetBytes>(
         &mut self,
@@ -298,6 +298,7 @@ impl AsanRuntime {
 
     /// Enable all function hooks
     pub fn enable_hooks(&mut self) {
+        log::trace!("ENABLE HOOKS");
         self.hooks_enabled = true;
     }
     /// Disable all function hooks
@@ -489,28 +490,23 @@ impl AsanRuntime {
                     log::trace!("Hooking {}", stringify!($name));
 
                     let target_function = frida_gum::Module::find_export_by_name($lib, stringify!($name)).expect("Failed to find function");
-                    self.hooks.insert(stringify!($name).to_string(), target_function);
-
+                    //self.hooks.insert(stringify!($name).to_string(), target_function);
+                    
+                    extern "system" { fn $name($($param: $param_type),*) -> $return_type; }
+                    
                     #[allow(non_snake_case)]
                     unsafe extern "C" fn [<replacement_ $name>]($($param: $param_type),*) -> $return_type {
                         let mut invocation = Interceptor::current_invocation();
                         let this = &mut *(invocation.replacement_data().unwrap().0 as *mut AsanRuntime);
-                        // let real_address = this.real_address_for_stalked(invocation.return_addr());
-                        if this.hooks_enabled {
-                            let previous_hook_state = this.hooks_enabled;
-                            this.hooks_enabled = false;
-                            let ret = this.[<hook_ $name>]($($param),*);
-                            this.hooks_enabled = previous_hook_state;
-                            ret
+                        let real_address = this.real_address_for_stalked(invocation.return_addr());
+                        if !this.suppressed_addresses.contains(&real_address) && this.module_map.as_ref().unwrap().find(real_address as u64).is_some() {
+                            this.[<hook_ $name>]($($param),*)
                         } else {
-                            let original = std::mem::transmute::<*const c_void, extern "C" fn($($param: $param_type),*) -> $return_type>(this.hooks.get(&stringify!($name).to_string()).unwrap().0);
-                            let previous_hook_state = this.hooks_enabled;
-                            this.hooks_enabled = false;
-                            let ret = (original)($($param),*);
-                            this.hooks_enabled = previous_hook_state;
-                            ret
+                            $name($($param),*)
                         }
+
                     }
+
                     let _ = interceptor.replace(
                         target_function,
                         NativePointer([<replacement_ $name>] as *mut c_void),
@@ -520,30 +516,24 @@ impl AsanRuntime {
             }
         }
 
+
+
         macro_rules! hook_func_with_check {
             ($lib:expr, $name:ident, ($($param:ident : $param_type:ty),*), $return_type:ty) => {
                 paste::paste! {
                     log::trace!("Hooking {}", stringify!($name));
                     let target_function = frida_gum::Module::find_export_by_name($lib, stringify!($name)).expect("Failed to find function");
-                    self.hooks.insert(stringify!($name).to_string(), target_function);
+
+                    extern "system" { fn $name($($param: $param_type),*) -> $return_type; }
 
                     #[allow(non_snake_case)]
                     unsafe extern "C" fn [<replacement_ $name>]($($param: $param_type),*) -> $return_type {
                         let mut invocation = Interceptor::current_invocation();
                         let this = &mut *(invocation.replacement_data().unwrap().0 as *mut AsanRuntime);
-                        if this.hooks_enabled && this.[<hook_check_ $name>]($($param),*) {
-                            let previous_hook_state = this.hooks_enabled;
-                            this.hooks_enabled = false;
-                            let ret = this.[<hook_ $name>]($($param),*);
-                            this.hooks_enabled = previous_hook_state;
-                            ret
+                        if this.[<hook_check_ $name>]($($param),*) {
+                            this.[<hook_ $name>]($($param),*)
                         } else {
-                            let original = std::mem::transmute::<*const c_void, extern "C" fn($($param: $param_type),*) -> $return_type>(this.hooks.get(&stringify!($name).to_string()).unwrap().0);
-                            let previous_hook_state = this.hooks_enabled;
-                            this.hooks_enabled = false;
-                            let ret = (original)($($param),*);
-                            this.hooks_enabled = previous_hook_state;
-                            ret
+                            $name($($param),*)
                         }
                     }
                     let _ = interceptor.replace(
@@ -551,6 +541,8 @@ impl AsanRuntime {
                         NativePointer([<replacement_ $name>] as *mut c_void),
                         NativePointer(core::ptr::from_mut(self) as *mut c_void)
                     );
+
+                    println!("Done");
                 }
             }
         }
@@ -2590,7 +2582,6 @@ impl Default for AsanRuntime {
             suppressed_addresses: Vec::new(),
             skip_ranges: Vec::new(),
             continue_on_error: false,
-            hooks: HashMap::new(),
             hooks_enabled: false,
             #[cfg(target_arch = "aarch64")]
             eh_frame: [0; ASAN_EH_FRAME_DWORD_COUNT],

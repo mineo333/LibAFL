@@ -379,7 +379,7 @@ mod tests {
     unsafe fn test_asan(options: &FuzzerOptions) {
         // The names of the functions to run
         let tests = vec![
-            ("LLVMFuzzerTestOneInput", None),
+           ("LLVMFuzzerTestOneInput", None),
             ("heap_oob_read", Some("heap out-of-bounds read")),
             ("heap_oob_write", Some("heap out-of-bounds write")),
             ("heap_uaf_write", Some("heap use-after-free write")),
@@ -412,7 +412,7 @@ mod tests {
                 Some("heap out-of-bounds write"),
             ),
             ("malloc_heap_uaf_write", Some("heap use-after-free write")),
-            ("malloc_heap_uaf_read", Some("heap use-after-free read")),
+            ("malloc_heap_uaf_read", Some("heap use-after-free read")), 
         ];
 
         //NOTE: RTLD_NOW is required on linux as otherwise the hooks will NOT work
@@ -432,7 +432,7 @@ mod tests {
         let mut frida_helper = FridaInstrumentationHelper::new(
             GUM.get().expect("Gum uninitialized"),
             options,
-            tuple_list!(coverage, asan, HookRuntime::new()),
+            tuple_list!(coverage, asan),
         );
 
         // Run the tests for each function
@@ -452,7 +452,6 @@ mod tests {
 
             let asan_obs = AsanErrorsObserver::from_static_asan_errors();
 
-            let asan_obs = AsanErrorsObserver::from_static_asan_errors();
 
             // Feedbacks to recognize an input as solution
             let mut objective = feedback_or_fast!(

@@ -273,7 +273,7 @@ impl FridaInstrumentationHelperBuilder {
         if stalker_enabled {
             for (i, module) in module_map.values().iter().enumerate() {
                 log::trace!(
-                    "module: {:?} {:x}",
+                    "module: {} {:x}",
                     module.name(),
                     module.range().base_address().0 as usize
                 );
@@ -299,12 +299,12 @@ impl FridaInstrumentationHelperBuilder {
                 .borrow_mut()
                 .init_all(gum, &ranges.borrow(), &module_map);
         }
-
         let transformer = FridaInstrumentationHelper::build_transformer(gum, &ranges, &runtimes);
-
         #[cfg(unix)]
         FridaInstrumentationHelper::<'_, RT>::workaround_gum_allocate_near();
 
+        
+        log::trace!("Done with helper");
         FridaInstrumentationHelper {
             transformer,
             ranges,
@@ -472,7 +472,6 @@ where
             let instr_size = instr.bytes().len();
             let address = instr.address();
             // log::trace!("x - block @ {:x} transformed to {:x}", address, output.writer().pc());
-            //the ASAN check needs to be done before the hook_rt check due to x86 insns such as call [mem]
             if ranges.borrow().contains_key(&(address as usize)) {
                 let mut runtimes = (*runtimes_unborrowed).borrow_mut();
                 if first {
@@ -527,6 +526,13 @@ where
                     }
                 }
 
+                if let Some(rt) = runtimes.match_first_type_mut::<AsanRuntime>() {
+                    rt.add_stalked_address(
+                        output.writer().pc() as usize - instr_size,
+                        address as usize,
+                    );
+                }
+
                 #[cfg(all(
                     feature = "cmplog",
                     any(target_arch = "aarch64", target_arch = "x86_64")
@@ -548,12 +554,7 @@ where
                     }
                 }
 
-                if let Some(rt) = runtimes.match_first_type_mut::<AsanRuntime>() {
-                    rt.add_stalked_address(
-                        output.writer().pc() as usize - instr_size,
-                        address as usize,
-                    );
-                }
+                
 
                 if let Some(_rt) = runtimes.match_first_type_mut::<DrCovRuntime>() {
                     basic_block_size += instr_size;

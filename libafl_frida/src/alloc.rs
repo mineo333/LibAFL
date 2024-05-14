@@ -10,7 +10,6 @@
 use std::{collections::BTreeMap, ffi::c_void};
 
 use backtrace::Backtrace;
-use frida_gum::{PageProtection, RangeDetails};
 use hashbrown::HashMap;
 use libafl_bolts::cli::FuzzerOptions;
 #[cfg(any(
@@ -22,7 +21,7 @@ use libafl_bolts::cli::FuzzerOptions;
         target_os = "android"
     )
 ))]
-use mmap_rs::{MmapFlags, MmapMut, MmapOptions, ReservedMut};
+use mmap_rs::{MmapFlags, MmapMut, MmapOptions, ReservedMut, MemoryAreas};
 use rangemap::RangeSet;
 use serde::{Deserialize, Serialize};
 
@@ -235,7 +234,8 @@ impl Allocator {
         let address = (metadata.address + self.page_size) as *mut c_void;
 
         self.allocations.insert(address as usize, metadata);
-        // log::trace!("serving address: {:?}, size: {:x}", address, size);
+         log::trace!("serving address: {:?}, size: {:x}", address, size);
+        
         address
     }
 
@@ -374,6 +374,8 @@ impl Allocator {
         end: usize,
         unpoison: bool,
     ) -> (usize, usize) {
+
+        log::trace!("new region: {:#x} {:#x} {}", start, end, unpoison);
         let shadow_mapping_start = map_to_shadow!(self, start);
 
         let shadow_start = self.round_down_to_page(shadow_mapping_start);
@@ -546,19 +548,23 @@ impl Allocator {
 
     /// Unpoison all the memory that is currently mapped with read/write permissions.
     pub fn unpoison_all_existing_memory(&mut self) {
-        RangeDetails::enumerate_with_prot(
-            PageProtection::Read,
-            &mut |range: &RangeDetails| -> bool {
-                let start = range.memory_range().base_address().0 as usize;
-                let end = start + range.memory_range().size();
+        let areas = MemoryAreas::open(None).expect("Failed to read memory areas");
 
-                if !self.is_managed(start as *mut c_void) {
-                    self.map_shadow_for_region(start, end, true);
-                }
+        for res in areas {
+            let area = res.expect("Failed to get area");
 
-                return true;
-            },
-        );
+            let start = area.start();
+            let end = area.end();
+
+            log::trace!("Unpoisoning: {:#x} {:#x}", start, end);
+
+            if !self.is_managed(start as *mut c_void) {
+                self.map_shadow_for_region(start, end, true);
+            }
+
+        }
+            
+        
     }
 
     /// Initialize the allocator, making sure a valid shadow bit is selected.
@@ -577,32 +583,36 @@ impl Allocator {
 
         // Enumerate memory ranges that are already occupied.
 
-        RangeDetails::enumerate_with_prot(
-            PageProtection::Read,
-            &mut |range: &RangeDetails| -> bool {
-                let start = range.memory_range().base_address().0 as usize;
-                let end = start + range.memory_range().size();
+        let areas = MemoryAreas::open(None).expect("Failed to read memory areas");
+
+        for res in areas {
+
+            let area = res.expect("Failed to get area");
+
+            let start = area.start();
+            let end = area.end();
+            log::trace!("New range: {:#x} {:#x}", start, end);
                 occupied_ranges.push((start, end));
                 // On x64, if end > 2**48, then that's in vsyscall or something.
-                #[cfg(all(unix, target_arch = "x86_64"))]
-                if end <= 2_usize.pow(48) && end > userspace_max {
-                    userspace_max = end;
-                }
-                //
-                // #[cfg(all(not(unix), target_arch = "x86_64"))]
-                // if end <= 2_usize.pow(64) && end > userspace_max {
-                //     userspace_max = end;
-                // }
+            #[cfg(all(unix, target_arch = "x86_64"))]
+            if end <= 2_usize.pow(48) && end > userspace_max {
+                userspace_max = end;
+            }
+            //
+            // #[cfg(all(not(unix), target_arch = "x86_64"))]
+            // if end <= 2_usize.pow(64) && end > userspace_max {
+            //     userspace_max = end;
+            // }
 
-                // On aarch64, if end > 2**52, then range is not in userspace
-                #[cfg(target_arch = "aarch64")]
-                if end <= 2_usize.pow(52) && end > userspace_max {
-                    userspace_max = end;
-                }
+            // On aarch64, if end > 2**52, then range is not in userspace
+            #[cfg(target_arch = "aarch64")]
+            if end <= 2_usize.pow(52) && end > userspace_max {
+                userspace_max = end;
+            }
 
-                return true;
-            },
-        );
+        }   
+            
+        
 
         #[cfg(unix)]
         let mut maxbit = 63;

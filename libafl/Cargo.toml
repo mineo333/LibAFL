@@ -300,7 +300,7 @@ fastbloom = { workspace = true, optional = true }
 [lints]
 workspace = true
 
-[target.'cfg(unix)'.dependencies]
+[target.'cfg(target_os = "linux")'.dependencies]
 libc = { workspace = true }                # For (*nix) libc
 z3 = { workspace = true, optional = true } # for concolic mutation
 
